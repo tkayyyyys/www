@@ -1,0 +1,166 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; font-family: system-ui, sans-serif; }
+#three-canvas { display: block; width: 100vw; height: 100vh; touch-action: none; position: relative; z-index: 1; }
+
+#background {
+  position: fixed; inset: 0; z-index: 0;
+  background-color: #1a1a1a;
+  /* Landscape (desktop) background. image-set() lets the browser pick the
+     smallest format it supports (AVIF -> WebP -> JPEG) and the right DPI. */
+  background-image: image-set(
+    url("img/tomasz_web@1x.avif") type("image/avif") 1x,
+    url("img/tomasz_web@2x.avif") type("image/avif") 2x,
+    url("img/tomasz_web@1x.webp") type("image/webp") 1x,
+    url("img/tomasz_web@2x.webp") type("image/webp") 2x,
+    url("img/tomasz_web@1x.jpg") 1x,
+    url("img/tomasz_web@2x.jpg") 2x);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  color: #f5f5f0;
+  overflow-y: auto;
+}
+/* Portrait (mobile) screens get the taller crop. */
+@media (orientation: portrait) {
+  #background {
+    background-image: image-set(
+      url("img/tomasz_mobile@1x.avif") type("image/avif") 1x,
+      url("img/tomasz_mobile@2x.avif") type("image/avif") 2x,
+      url("img/tomasz_mobile@1x.webp") type("image/webp") 1x,
+      url("img/tomasz_mobile@2x.webp") type("image/webp") 2x,
+      url("img/tomasz_mobile@1x.jpg") 1x,
+      url("img/tomasz_mobile@2x.jpg") 2x);
+  }
+}
+/* External-doc pages (e.g. #work) sit on a white surface to match the Google
+   Doc, so the whole background goes white rather than the dark home theme. */
+#background.doc-mode { background: #fff; }
+#background a {
+  color: #f5f5f0;
+  text-decoration: none;
+  border-bottom: 2px solid #f5f5f0;
+}
+#background a:hover { color: #fff; border-bottom-color: #fff; }
+
+#page-nav {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  gap: 64px;
+}
+#page-nav a {
+  font: 700 96px/1 Georgia, serif;
+  letter-spacing: 0.05em;
+  border-bottom-width: 4px;
+  padding-bottom: 6px;
+}
+
+.page {
+  max-width: 760px; margin: 0 auto; padding: 80px 48px;
+  font: 18px/1.6 Georgia, serif;
+}
+.page-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 24px; margin-bottom: 48px;
+  border-bottom: 1px solid #444; padding-bottom: 24px;
+}
+.page-header h1 { font: 700 56px/1.1 Georgia, serif; margin: 0; }
+.page-links { display: flex; gap: 20px; }
+.page-links a { font: 18px/1 system-ui, sans-serif; border-bottom-width: 1px; }
+.page section { margin-bottom: 36px; }
+
+/* External documents (e.g. the Google Doc work page) render as black text on a
+   transparent background, so give them a light paper surface to sit on. The
+   doc's own inline <style> handles the rest of the formatting. */
+.doc-page {
+  max-width: 820px; margin: 0 auto; padding: 64px 56px;
+  background: #fff; color: #1a1a1a;
+  min-height: 100vh;
+}
+.doc-page a { color: inherit; }
+.doc-page { overflow-x: hidden; }
+/* Google Doc images come wrapped in inline-block <span>s, both the span and
+   the <img> carrying hard-coded pixel width/height as inline styles. Override
+   both so they scale down to the page width on mobile while keeping their
+   aspect ratio. !important is required to beat the doc's inline styles. */
+.doc-page img,
+.doc-page span:has(> img) {
+  max-width: 100% !important;
+  height: auto !important;
+}
+@media (max-width: 767px) {
+  .doc-page { padding: 40px 20px; }
+}
+.page h2 { font: 700 24px/1.2 Georgia, serif; margin: 0 0 12px; }
+.page p { margin: 0 0 8px; color: #d8d8d2; }
+
+/* The source canvas hosts the live DOM that we rasterize via drawElementImage.
+   It must be in the document (for layout) but invisible to the user. */
+#source-canvas {
+  position: fixed; left: 0; top: 0;
+  width: 1024px; height: 1024px;
+  opacity: 0; pointer-events: none; z-index: -1;
+}
+#page-content {
+  width: 1024px; height: 1024px; box-sizing: border-box;
+  padding: 90px 100px; background: #fafaf7; color: #1a1a1a;
+  font: 40px/1.45 Georgia, serif;
+}
+#page-content h1 { font: 700 110px/1.1 Georgia, serif; margin: 0 0 48px; }
+#page-content p  { margin: 0 0 28px; }
+#page-content .meta { font-size: 28px; color: #777; margin-top: 60px; }
+
+#hint {
+  position: fixed; z-index: 2; color: #aaa;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+}
+#hint::before { content: "move the mouse over the page"; }
+
+/* Desktop */
+@media (min-width: 768px) and (hover: hover) {
+  #three-canvas {
+    cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M2 2 L2 22 L8 17 L12 25 L15 23 L11 16 L19 16 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/></svg>") 2 2, default;
+  }
+  #three-canvas.over-link { cursor: grab; }
+  #three-canvas:active { cursor: grabbing; }
+  #hint {
+    left: 16px; bottom: 12px;
+    font: 14px/1 system-ui, sans-serif;
+  }
+}
+
+/* Mobile / touch */
+@media (max-width: 767px), (hover: none) {
+  #hint {
+    left: 0; right: 0; bottom: 14px;
+    text-align: center;
+    font: 11px/1 system-ui, sans-serif;
+  }
+  #hint::before { content: "drag across the page to tear it"; }
+
+  #page-nav {
+    flex-direction: column;
+    gap: 32px;
+  }
+  #page-nav a {
+    font-size: 56px;
+    border-bottom-width: 3px;
+    padding-bottom: 4px;
+  }
+
+  .page {
+    padding: 48px 20px 64px;
+    font-size: 16px;
+  }
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 32px;
+    padding-bottom: 16px;
+  }
+  .page-header h1 { font-size: 36px; }
+  .page-links { gap: 16px; }
+  .page-links a { font-size: 16px; }
+  .page section { margin-bottom: 28px; }
+  .page h2 { font-size: 20px; }
+}

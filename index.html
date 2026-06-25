@@ -1,5 +1,43 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tomasz Kobialka</title>
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="styles.css">
+<script>
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}var u=t.createElement("script");u.type="text/javascript",u.crossOrigin="anonymous",u.async=!0,u.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";var l=t.getElementsByTagName("script")[0];l.parentNode.insertBefore(u,l);var d=e;function c(t){t&&d.set_config(t)}d=e.init=function(t,e,o){if(e&&e.token&&e.token!==i)return d.toString()+"."+o;var n=d;if(o)for(var p=d.instance=function(t){var e=d;return e._i.push([t,null,o]),e},r=0;r<e.loaded.length;r++){var s=e.loaded[r];p(s)}else{n=d;void 0!==a&&n._i.push([i,s,a])}return n._i.push([t,e,o]),n};g(d,"capture");g(d,"identify");g(d,"alias");g(d,"set_config");g(d,"register");g(d,"register_once");g(d,"unregister");g(d,"opt_in_capturing");g(d,"opt_out_capturing");g(d,"has_opted_in_capturing");g(d,"has_opted_out_capturing");g(d,"capture_pageview");g(d,"capture_pageleave");g(d,"group");g(d,"onFeatureFlags");g(d,"reloadFeatureFlags");g(d,"debug");var q=e;q.toString=function(t){var e="posthog";return a&&(e+="."+a),t||(e+=" (stub)"),e};for(var r=0;r<e._i.length;r++){var s=e._i[r];g(d,s[0])}e._i.push([i,s,a])},window.posthog=e)}(document,window.posthog||[]);
+try {
+  if (window.posthog && typeof window.posthog.init === 'function') {
+    posthog.init(
+      'phc_sN8Tk9uwv8aV7Urngjfs2yKpQ5to4qhikEDVbxc5dscb',
+      { api_host: 'https://eu.i.posthog.com', person_profiles: 'identified_only' }
+    );
+  }
+} catch (e) { /* posthog blocked or stub missing — page works without analytics */ }
+</script>
+</head>
 <body>
-Hello world
+
+<canvas id="source-canvas" width="1024" height="1024" layoutsubtree>
+  <div id="page-content">
+    <h3>Hello world.</h3>
+  </div>
+</canvas>
+
+
+<div id="background">
+  <nav id="page-nav">
+    <a data-page="cv">CV</a>
+    <a data-page="work">Work</a>
+  </nav>
+</div>
+
+
+<canvas id="three-canvas"></canvas>
+<div id="hint"></div>
+
+<script type="module" src="cloth.js"></script>
 </body>
 </html>
