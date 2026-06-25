@@ -77,11 +77,6 @@ const DAMPING = 0.985;
 const TEAR_RATIO = 4.0;
 const ITERATIONS = 18;
 const SETTLE_FRAMES = 120;
-// Hold the cloth flat and frozen for a moment after load before physics kicks
-// in. frameCount stays at 0 during the wait so gravity's ease-in and the
-// settle/tear windows still start from frame 0 once physics activates.
-const PHYSICS_DELAY_MS = 500;
-let startTime = null;
 let frameCount = 0;
 let firstTearShown = false;
 const tmp = new THREE.Vector3();
@@ -465,15 +460,9 @@ function applyMouse() {
 // 6. Loop
 // ---------------------------------------------------------------
 function tick() {
-  const now = performance.now();
-  if (startTime === null) startTime = now;
-  const physicsActive = now - startTime >= PHYSICS_DELAY_MS;
-  let torn = false;
-  if (physicsActive) {
-    frameCount++;
-    applyMouse();
-    torn = stepPhysics();
-  }
+  frameCount++;
+  applyMouse();
+  const torn = stepPhysics();
   if (torn) rebuildIndices();
   writePositions();
   // Keep the DOM->texture loop live until the page starts tearing — then freeze it.
