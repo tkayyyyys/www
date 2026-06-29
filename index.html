@@ -38,6 +38,41 @@ try {
 <canvas id="three-canvas"></canvas>
 <div id="hint"></div>
 
-<script type="module" src="cloth.js"></script>
+<!-- Opaque "paper" placeholder. Sits above every layer and paints on the very
+     first frame (it's pure CSS + text), so the heavy three.js + cloth.js load —
+     and the deferred background photo — never flash on screen before the cloth
+     is ready. cloth.js calls window.__clothReady() after its first render. -->
+<div id="cloth-loader" aria-hidden="true">
+  <h3>Hello world.</h3>
+</div>
+
+<script>
+  // The cloth's fallback texture stretches a 1024² canvas onto the viewport, so
+  // the placeholder heading must match that horizontal stretch (vw/vh) to line
+  // up with the live cloth. Keep it in sync until the placeholder is gone.
+  (function syncStretch() {
+    if (window.__clothRevealed) return;
+    document.documentElement.style.setProperty('--cloth-stretch', window.innerWidth / window.innerHeight);
+    requestAnimationFrame(syncStretch);
+  })();
+
+  // Reveal the real scene: bring in the (deferred) background photo behind the
+  // cloth and fade the placeholder out. Idempotent — safe to call more than once.
+  window.__clothReady = function () {
+    if (window.__clothRevealed) return;
+    window.__clothRevealed = true;
+    document.getElementById('background')?.classList.add('bg-ready');
+    var loader = document.getElementById('cloth-loader');
+    if (!loader) return;
+    loader.classList.add('hidden');
+    loader.addEventListener('transitionend', function () { loader.remove(); }, { once: true });
+  };
+  // Fail-safe: if three.js/cloth.js never loads (unpkg down, offline), don't trap
+  // the page behind the placeholder — degrade to the plain photo + nav.
+  setTimeout(window.__clothReady, 9000);
+</script>
+
+<script type="module" src="cloth.js"
+        onerror="window.__clothReady && window.__clothReady()"></script>
 </body>
 </html>

@@ -4,8 +4,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 #background {
   position: fixed; inset: 0; z-index: 0;
   background-color: #1a1a1a;
-  /* Landscape (desktop) background. image-set() lets the browser pick the
-     smallest format it supports (AVIF -> WebP -> JPEG) and the right DPI. */
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  color: #f5f5f0;
+  overflow-y: auto;
+}
+/* The photo is the layer the cloth hides, so it isn't needed at first paint.
+   cloth.js adds .bg-ready after its first render, letting three.js + cloth.js
+   have the bandwidth first; the photo then streams in quietly behind the cloth.
+   image-set() lets the browser pick the smallest format it supports
+   (AVIF -> WebP -> JPEG) and the right DPI. */
+#background.bg-ready {
   background-image: image-set(
     url("img/tomasz_web@1x.avif") type("image/avif") 1x,
     url("img/tomasz_web@2x.avif") type("image/avif") 2x,
@@ -13,15 +23,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
     url("img/tomasz_web@2x.webp") type("image/webp") 2x,
     url("img/tomasz_web@1x.jpg") 1x,
     url("img/tomasz_web@2x.jpg") 2x);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  color: #f5f5f0;
-  overflow-y: auto;
 }
 /* Portrait (mobile) screens get the taller crop. */
 @media (orientation: portrait) {
-  #background {
+  #background.bg-ready {
     background-image: image-set(
       url("img/tomasz_mobile@1x.avif") type("image/avif") 1x,
       url("img/tomasz_mobile@2x.avif") type("image/avif") 2x,
@@ -30,6 +35,35 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
       url("img/tomasz_mobile@1x.jpg") 1x,
       url("img/tomasz_mobile@2x.jpg") 2x);
   }
+}
+
+/* Opaque "paper" placeholder shown until the cloth's first frame renders.
+   The resting cloth is a flat lit plane (MeshStandardMaterial under the scene's
+   fixed lighting), so the #fafaf7 paper reads as a near-uniform grey on screen —
+   matching that tone here keeps the swap from flashing brighter. */
+#cloth-loader {
+  position: fixed; inset: 0; z-index: 3;
+  background: rgb(166, 166, 164);
+  opacity: 1;
+  transition: opacity 0.45s ease;
+  pointer-events: none;
+}
+#cloth-loader.hidden { opacity: 0; }
+/* Mirrors exactly how the cloth's fallback texture draws the heading: because
+   #page-content sits inside a <canvas> its DOM is never laid out, so the text is
+   drawn at canvas (0,0) at 46.8px, then the 1024² texture is stretched onto the
+   viewport-shaped plane (x by vw/1024, y by vh/1024). We reproduce that here:
+   top-left origin, vertical size 46.8/1024 = 4.57vh, and a horizontal scaleX of
+   the viewport aspect (vw/vh), set as --cloth-stretch by the inline script. */
+#cloth-loader h3 {
+  position: absolute;
+  top: 0; left: 0;
+  margin: 0;
+  white-space: nowrap;
+  font: 700 4.57vh/1 Georgia, serif;
+  color: #1a1a1a;
+  transform: scaleX(var(--cloth-stretch, 1.4));
+  transform-origin: top left;
 }
 /* External-doc pages (e.g. #work) sit on a white surface to match the Google
    Doc, so the whole background goes white rather than the dark home theme. */

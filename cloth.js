@@ -79,6 +79,7 @@ const ITERATIONS = 18;
 const SETTLE_FRAMES = 120;
 let frameCount = 0;
 let firstTearShown = false;
+let clothRevealed = false;
 const tmp = new THREE.Vector3();
 
 function stepPhysics() {
@@ -475,6 +476,13 @@ function tick() {
     }
   }
   renderer.render(scene, camera);
+  // First frame is on screen — bring in the deferred background photo behind the
+  // cloth and fade out the loading placeholder. The canvas now has paper drawn
+  // on it, so the swap from placeholder to live cloth is seamless.
+  if (!clothRevealed) {
+    clothRevealed = true;
+    window.__clothReady?.();
+  }
   requestAnimationFrame(tick);
 }
 tick();
