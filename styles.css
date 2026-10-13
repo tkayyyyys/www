@@ -75,6 +75,20 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 }
 #background a:hover { color: #fff; border-bottom-color: #fff; }
 
+/* One-line intro at the very bottom of the page: real, visible copy for
+   crawlers, kept caption-sized and muted so it stays discreet behind the
+   cloth. 10px is the floor — smaller reads as hidden text to search engines. */
+#intro {
+  position: absolute; left: 0; right: 0; bottom: 12px; z-index: 1;
+  display: flex; justify-content: center; align-items: baseline; gap: 6px;
+  font: 10px/1 system-ui, sans-serif;
+  color: #9a9a94;
+  pointer-events: none;
+}
+#intro h1 { font: 700 10px/1 Georgia, serif; margin: 0; }
+#intro h1::after { content: "\00b7"; margin-left: 6px; font-weight: 400; }
+#intro p  { margin: 0; }
+
 #page-nav {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -170,6 +184,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
     font: 11px/1 system-ui, sans-serif;
   }
   #hint::before { content: "drag across the page to tear it"; }
+
+  #intro {
+    bottom: 34px; padding: 0 16px;
+    flex-wrap: wrap;
+  }
 
   #page-nav {
     flex-direction: column;

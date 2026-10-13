@@ -1,2 +1,4 @@
 .env
-.claude
+.claude/*
+/scripts/*
+.DS_Store
