@@ -6,27 +6,135 @@ import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 const srcCanvas = document.getElementById('source-canvas');
 const srcCtx = srcCanvas.getContext('2d');
 const pageEl = document.getElementById('page-content');
-const hasDrawElementImage = typeof srcCtx.drawElementImage === 'function';
+let hasDrawElementImage = typeof srcCtx.drawElementImage === 'function';
+
+// The text on the cloth lives in a public Google Doc so it can be edited
+// without a deploy. The plain-text export is tiny, has no images, and answers
+// with `access-control-allow-origin: *`, so a plain fetch works from any origin.
+// One line per doc paragraph; the body starts with a BOM and uses CRLF.
+const CLOTH_DOC_URL = 'https://docs.google.com/document/d/1YLRYtxePRIJzSMIwcWiJ2h0cZQN3C1Luc4a_5otdVV8/export?format=txt';
+
+// Font sizes the cloth steps through as the doc grows, largest first. The
+// first four are h3–h6 at the 40px base the cloth was designed with
+// (1.17 / 1 / 0.83 / 0.67em); the rest keep the same ~17% ratio down to the
+// 12px floor. With the 1.25 line height each step fits this many paragraphs
+// on the 1024px paper: 17 / 20 / 24 / 30 / 36 / 43 / 52 / 63 / 68. Past 68
+// the text stays at 12px and the remainder falls off the bottom.
+const CLOTH_FONT_SIZES = [46.8, 40, 33.2, 26.8, 22.4, 18.7, 15.6, 13, 12];
+
+// Computed line height in px, falling back to 1.25em when the browser
+// reports 'normal'.
+function lineHeightPx(s) {
+  const lh = parseFloat(s.lineHeight);
+  return Number.isFinite(lh) ? lh : parseFloat(s.fontSize) * 1.25;
+}
+
+// Choose the largest step at which `lineCount` paragraphs fit the paper and
+// apply it inline. The line-height ratio comes from styles.css (unitless, so
+// it scales with the size); both render paths then pick the size up through
+// the <p>s' computed styles. Counts paragraphs, not wrapped lines: a long
+// paragraph that wraps can still run off the bottom.
+function fitClothFontSize(lineCount) {
+  const s = getComputedStyle(pageEl);
+  const ratio = lineHeightPx(s) / parseFloat(s.fontSize);
+  const size = CLOTH_FONT_SIZES.find(px => lineCount * px * ratio <= srcCanvas.height)
+    ?? CLOTH_FONT_SIZES[CLOTH_FONT_SIZES.length - 1];
+  pageEl.style.fontSize = `${size}px`;
+}
+
+// Replace #page-content's children with one <p> per non-blank line of `text`.
+// Blank doc paragraphs are dropped: they are neither drawn nor counted toward
+// the font-size step. Built with textContent, never innerHTML — the text
+// comes from a third party.
+function renderClothText(text) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  fitClothFontSize(lines.length);
+  pageEl.replaceChildren(...lines.map(line => {
+    const p = document.createElement('p');
+    p.textContent = line;
+    return p;
+  }));
+}
+
+// Fetch the doc and paint it. Called once `texture` exists (section 2). The
+// explicit repaint matters when the cloth was torn before the text arrived,
+// because tick() stops repainting after the first tear.
+async function loadClothText() {
+  try {
+    const res = await fetch(CLOTH_DOC_URL);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    renderClothText(await res.text());
+    paintSource();
+    texture.needsUpdate = true;
+  } catch (err) {
+    // Leave the paper blank; the site works without the text.
+    console.error('cloth text failed to load', err);
+  }
+}
 
 function paintSource() {
   if (hasDrawElementImage) {
-    srcCtx.reset();
-    srcCtx.drawElementImage(pageEl, 0, 0, 1024, 1024);
-  } else {
-    // Fallback: derive everything from the live DOM + CSS so the canvas
-    // stays in sync with #page-content's content and styles.css.
-    const pageStyle = getComputedStyle(pageEl);
-    const pageRect = pageEl.getBoundingClientRect();
-    srcCtx.fillStyle = pageStyle.backgroundColor || '#fafaf7';
-    srcCtx.fillRect(0, 0, 1024, 1024);
-    srcCtx.textBaseline = 'top';
-    for (const el of pageEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p')) {
-      const s = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      srcCtx.font = `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
-      srcCtx.fillStyle = s.color;
-      srcCtx.fillText(el.textContent, r.left - pageRect.left, r.top - pageRect.top);
+    try {
+      srcCtx.reset();
+      srcCtx.drawElementImage(pageEl, 0, 0, 1024, 1024);
+      return;
+    } catch (err) {
+      // The HTML-in-canvas API is still changing: current Chrome exposes
+      // drawElementImage but throws unless the canvas carries an attribute
+      // newer than `layoutsubtree`. A thrown first paint used to abort this
+      // whole module (no cloth at all), so drop to the manual painter for good.
+      console.warn('drawElementImage unusable, painting manually', err);
+      hasDrawElementImage = false;
     }
+  }
+  // Fallback: #page-content sits inside <canvas> fallback content, so it is
+  // never laid out (every rect is 0×0 at the origin). Reproduce a minimal
+  // block flow by hand from the computed styles: top-left origin, each
+  // block word-wrapped to the paper width, blocks stacked with their margins.
+  // Then place the whole block: centred when styles.css asks for it via
+  // justify-content / align-content (desktop), else top-left. Offsets clamp
+  // at 0 so a block larger than the paper is clipped bottom/right, as before.
+  const pageStyle = getComputedStyle(pageEl);
+  srcCtx.fillStyle = pageStyle.backgroundColor || '#fafaf7';
+  srcCtx.fillRect(0, 0, 1024, 1024);
+  srcCtx.textBaseline = 'top';
+  const maxWidth = srcCanvas.width;
+  const lines = [];
+  let blockWidth = 0;
+  let y = 0;
+  for (const el of pageEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p')) {
+    if (y > srcCanvas.height) break;
+    const s = getComputedStyle(el);
+    const font = `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+    srcCtx.font = font;
+    const lineHeight = lineHeightPx(s);
+    y += parseFloat(s.marginTop) || 0;
+    const push = text => {
+      lines.push({ text, y, font, color: s.color });
+      blockWidth = Math.max(blockWidth, Math.min(maxWidth, srcCtx.measureText(text).width));
+      y += lineHeight;
+    };
+    // Greedy word wrap. A single word wider than the paper overflows rather
+    // than being broken mid-word.
+    let line = '';
+    for (const word of el.textContent.split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && srcCtx.measureText(candidate).width > maxWidth) {
+        push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    push(line); // flush the last line
+    y += parseFloat(s.marginBottom) || 0;
+  }
+  const x0 = pageStyle.justifyContent === 'center' ? Math.max(0, (srcCanvas.width - blockWidth) / 2) : 0;
+  const y0 = pageStyle.alignContent === 'center' ? Math.max(0, (srcCanvas.height - y) / 2) : 0;
+  for (const l of lines) {
+    srcCtx.font = l.font;
+    srcCtx.fillStyle = l.color;
+    srcCtx.fillText(l.text, x0, y0 + l.y);
   }
 }
 paintSource();
@@ -53,6 +161,7 @@ scene.add(key);
 const texture = new THREE.CanvasTexture(srcCanvas);
 texture.colorSpace = THREE.SRGBColorSpace;
 texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+loadClothText();
 
 // ---------------------------------------------------------------
 // 3. Cloth — particles + verlet integration + tearable constraints
@@ -257,38 +366,62 @@ function buildCloth() {
 buildCloth();
 
 // ---------------------------------------------------------------
-// 5. Mouse — raycast, then claw nearby particles to stretch & tear
+// 5. Pointer — raycast, then claw nearby particles to stretch & tear
 // ---------------------------------------------------------------
+// #three-canvas is pointer-events:none; the transparent #cloth-hit layer on
+// top of it owns all input (see the porthole below for why).
+const hitEl = document.getElementById('cloth-hit');
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2(-10, -10);
 let mouseActive = false;
 let isTouch = false;
 let prevHit = null;
 
-threeCanvas.addEventListener('pointermove', (e) => {
+function trackPointer(e) {
   ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
   ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
   mouseActive = true;
   isTouch = e.pointerType === 'touch';
-  updateOverLink(e);
-});
-threeCanvas.addEventListener('pointerleave', () => {
+  updatePorthole(e);
+}
+hitEl.addEventListener('pointermove', trackPointer);
+// A tap has no hover before it: test on pointerdown too, so a tap on a hole
+// opens the porthole and the next tap there reaches what is behind.
+hitEl.addEventListener('pointerdown', trackPointer);
+hitEl.addEventListener('pointerleave', () => {
   mouseActive = false;
   prevHit = null;
-  threeCanvas.classList.remove('over-link');
 });
 
-function updateOverLink(e) {
-  if (!mesh || isTouch) return;
+// Porthole — how input reaches a cross-origin <iframe> (the message doc)
+// behind the cloth. Events can't be forwarded into one, so when the pointer
+// is over a hole in the cloth, clip a disc around it out of the hit layer:
+// inside the disc the browser hit-tests straight through to #background, so
+// clicks, wheel and keyboard focus land on the real element. Leaving the disc
+// lands back on this layer, whose pointermove moves or closes it.
+// Never close it from pointerleave: entering the disc fires pointerleave, and
+// closing there would put the layer back under the pointer (flicker loop).
+const PORTHOLE_PX = 40;
+let portholeOpen = false;
+function updatePorthole(e) {
+  if (!mesh) return;
   raycaster.setFromCamera(ndc, camera);
-  if (raycaster.intersectObject(mesh, false).length) {
-    threeCanvas.classList.remove('over-link');
-    return;
-  }
-  threeCanvas.style.pointerEvents = 'none';
-  const below = document.elementFromPoint(e.clientX, e.clientY);
-  threeCanvas.style.pointerEvents = '';
-  threeCanvas.classList.toggle('over-link', !!(below && below.closest && below.closest('a')));
+  if (raycaster.intersectObject(mesh, false).length) { closePorthole(); return; }
+  const w = window.innerWidth, h = window.innerHeight, r = PORTHOLE_PX;
+  const x = e.clientX, y = e.clientY;
+  // Outer rect clockwise, disc anticlockwise: a hole under the default
+  // nonzero rule, without relying on path(evenodd, …) support.
+  hitEl.style.clipPath =
+    `path("M0 0H${w}V${h}H0Z M${x - r} ${y}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z")`;
+  portholeOpen = true;
+  // The pointer is through the cloth: nothing to claw, next event goes behind.
+  mouseActive = false;
+  prevHit = null;
+}
+function closePorthole() {
+  if (!portholeOpen) return;
+  hitEl.style.clipPath = '';
+  portholeOpen = false;
 }
 
 // Background pages — fetch any data-page link, swap #background contents,
@@ -309,6 +442,15 @@ const EXTERNAL_PAGES = {
   cv: 'https://docs.google.com/document/d/1vCS0z7NnixBY60FmcRMhGYpvost8DRUgQquHwmfzPR8/mobilebasic',
 };
 
+// Pages shown live in an <iframe> rather than fetched and injected. #message
+// is the Google Docs *editor* for the doc the cloth's text comes from, so a
+// visitor's message becomes the cloth on the next load. The editor only runs
+// as a frame; docs.google.com sends no X-Frame-Options / frame-ancestors, so
+// a cross-origin frame is allowed. Reached through the porthole (section 5).
+const FRAME_PAGES = {
+  message: 'https://docs.google.com/document/d/1YLRYtxePRIJzSMIwcWiJ2h0cZQN3C1Luc4a_5otdVV8/edit?tab=t.0',
+};
+
 // Bumped on every loadPage call. A fetch that resolves after a newer
 // navigation has started carries a stale token, so it bails instead of
 // clobbering the current page or firing a mismatched 'page loaded'.
@@ -319,8 +461,18 @@ async function loadPage(page) {
   // External docs render as black text on a white paper surface, so flip the
   // whole #background to white to match the Google Doc instead of letting the
   // dark theme show through the doc's margins.
-  backgroundEl.classList.toggle('doc-mode', !!EXTERNAL_PAGES[page]);
+  backgroundEl.classList.toggle('doc-mode', !!(EXTERNAL_PAGES[page] || FRAME_PAGES[page]));
   if (!page) { backgroundEl.innerHTML = homeMarkup; return; }
+  if (FRAME_PAGES[page]) {
+    const frame = document.createElement('iframe');
+    frame.className = 'frame-page';
+    frame.src = FRAME_PAGES[page];
+    frame.title = page;
+    frame.setAttribute('allow', 'clipboard-read; clipboard-write');
+    backgroundEl.replaceChildren(frame);
+    window.posthog?.capture?.('page loaded', { page });
+    return;
+  }
   try {
     const url = EXTERNAL_PAGES[page] || page;
     if (EXTERNAL_PAGES[page]) {
@@ -389,38 +541,70 @@ window.addEventListener('popstate', (e) => {
 
 if (pageFromHash()) loadPage(pageFromHash());
 
-// Forward clicks through torn regions to whatever's behind the canvas.
-threeCanvas.addEventListener('click', (e) => {
+// Forward clicks through torn regions to whatever's behind. Still needed for
+// touch and for a click with no preceding move; with the porthole open the
+// click never reaches this layer. (A synthetic click can't drive a
+// cross-origin iframe — that is what the porthole is for.)
+hitEl.addEventListener('click', (e) => {
   const cx = (e.clientX / window.innerWidth) * 2 - 1;
   const cy = -(e.clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera({ x: cx, y: cy }, camera);
   if (raycaster.intersectObject(mesh, false).length) return; // cloth blocks it
-  threeCanvas.style.pointerEvents = 'none';
+  hitEl.style.pointerEvents = 'none';
   const below = document.elementFromPoint(e.clientX, e.clientY);
-  threeCanvas.style.pointerEvents = '';
-  if (below && below !== threeCanvas) below.click();
+  hitEl.style.pointerEvents = '';
+  if (below && below !== hitEl) below.click();
 });
 
-// Scroll forwarding — the canvas sits on top of #background (z-index 1) and
-// captures all wheel/touch input, so the scrollable page behind it never
-// receives it. Forward the scroll delta to #background directly. Touch drags
-// still tear the cloth (the layers are independent); they now also scroll the
-// document revealed behind it.
-threeCanvas.addEventListener('wheel', (e) => {
-  backgroundEl.scrollTop += e.deltaY;
+// Scroll forwarding — the hit layer sits on top of #background (z-index 1) and
+// captures wheel/touch input, so the scrollable page behind it never receives
+// it; forward that delta to #background directly. Through an open porthole the
+// event targets the real element instead and scrolls natively, so only events
+// that hit the layer are forwarded. Listening on window catches both cases,
+// which the home-view flip below needs (on desktop the pointer is usually over
+// a hole). Touch drags still tear the cloth (the layers are independent); they
+// now also scroll the document revealed behind it.
+const HOME_FLIP_THRESHOLD = 40;
+const HOME_FLIP_COOLDOWN  = 700;
+let homeFlipAccum = 0;
+let homeFlipUntil = 0;
+
+function homeScroll(delta) {
+  if (!backgroundEl.querySelector('#home')) return false;
+  const now = performance.now();
+  if (now < homeFlipUntil || !delta) return true;
+  if (Math.sign(delta) !== Math.sign(homeFlipAccum)) homeFlipAccum = 0;
+  homeFlipAccum += delta;
+  if (Math.abs(homeFlipAccum) < HOME_FLIP_THRESHOLD) return true;
+  const toNav = homeFlipAccum > 0;
+  homeFlipAccum = 0;
+  if (toNav !== backgroundEl.classList.contains('nav-view')) {
+    backgroundEl.classList.toggle('nav-view', toNav);
+    homeFlipUntil = now + HOME_FLIP_COOLDOWN;
+  }
+  return true;
+}
+
+window.addEventListener('wheel', (e) => {
+  const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+  if (homeScroll(dy)) return;
+  if (e.target === hitEl) backgroundEl.scrollTop += dy;
 }, { passive: true });
 
 let lastTouchY = null;
-threeCanvas.addEventListener('touchstart', (e) => {
+window.addEventListener('touchstart', (e) => {
   lastTouchY = e.touches[0] ? e.touches[0].clientY : null;
+  homeFlipAccum = 0;
 }, { passive: true });
-threeCanvas.addEventListener('touchmove', (e) => {
+window.addEventListener('touchmove', (e) => {
   if (lastTouchY === null || !e.touches[0]) return;
   const y = e.touches[0].clientY;
-  backgroundEl.scrollTop -= y - lastTouchY;
+  const dy = lastTouchY - y;
   lastTouchY = y;
+  if (homeScroll(dy)) return;
+  if (e.target === hitEl) backgroundEl.scrollTop += dy;
 }, { passive: true });
-threeCanvas.addEventListener('touchend', () => { lastTouchY = null; }, { passive: true });
+window.addEventListener('touchend', () => { lastTouchY = null; }, { passive: true });
 
 const CLAW_RADIUS = 0.7;
 const CLAW_STRENGTH = 0.55;
@@ -491,5 +675,6 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  closePorthole();
   buildCloth();
 });

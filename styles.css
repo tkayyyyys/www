@@ -1,5 +1,10 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; font-family: system-ui, sans-serif; }
-#three-canvas { display: block; width: 100vw; height: 100vh; touch-action: none; position: relative; z-index: 1; }
+#three-canvas { display: block; width: 100vw; height: 100vh; position: relative; z-index: 1; pointer-events: none; }
+/* Input layer above the canvas (cloth.js §5). Its clip-path is the porthole:
+   a disc cut out around the pointer when it is over a hole, so input falls
+   through to #background. Clipping this, not the canvas, leaves the rendered
+   cloth untouched. */
+#cloth-hit { position: fixed; inset: 0; z-index: 1; touch-action: none; }
 
 #background {
   position: fixed; inset: 0; z-index: 0;
@@ -49,22 +54,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
   pointer-events: none;
 }
 #cloth-loader.hidden { opacity: 0; }
-/* Mirrors exactly how the cloth's fallback texture draws the heading: because
-   #page-content sits inside a <canvas> its DOM is never laid out, so the text is
-   drawn at canvas (0,0) at 46.8px, then the 1024² texture is stretched onto the
-   viewport-shaped plane (x by vw/1024, y by vh/1024). We reproduce that here:
-   top-left origin, vertical size 46.8/1024 = 4.57vh, and a horizontal scaleX of
-   the viewport aspect (vw/vh), set as --cloth-stretch by the inline script. */
-#cloth-loader h3 {
-  position: absolute;
-  top: 0; left: 0;
-  margin: 0;
-  white-space: nowrap;
-  font: 700 4.57vh/1 Georgia, serif;
-  color: #1a1a1a;
-  transform: scaleX(var(--cloth-stretch, 1.4));
-  transform-origin: top left;
-}
 /* External-doc pages (e.g. #work) sit on a white surface to match the Google
    Doc, so the whole background goes white rather than the dark home theme. */
 #background.doc-mode { background: #fff; }
@@ -75,24 +64,55 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 }
 #background a:hover { color: #fff; border-bottom-color: #fff; }
 
-/* One-line intro at the very bottom of the page: real, visible copy for
-   crawlers, kept caption-sized and muted so it stays discreet behind the
-   cloth. 10px is the floor — smaller reads as hidden text to search engines. */
+#home {
+  position: absolute; inset: 0;
+  overflow: hidden;
+}
+#intro, #page-nav {
+  position: absolute; inset: 0; box-sizing: border-box;
+  display: flex; justify-content: center;
+  transform: none; visibility: visible;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0s;
+}
+#background.nav-view #intro { transform: translateY(-100%); }
+#background:not(.nav-view) #page-nav { transform: translateY(100%); }
+#background.nav-view #intro,
+#background:not(.nav-view) #page-nav {
+  visibility: hidden;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.6s;
+}
+@media (prefers-reduced-motion: reduce) {
+  #intro, #page-nav { transition: none; }
+}
+/* Artist bio: real, visible copy for crawlers, kept small so it stays
+   discreet behind the cloth. Never go below 10px — smaller reads as hidden
+   text to search engines. */
 #intro {
-  position: absolute; left: 0; right: 0; bottom: 12px; z-index: 1;
-  display: flex; justify-content: center; align-items: baseline; gap: 6px;
-  font: 10px/1 system-ui, sans-serif;
-  color: #9a9a94;
+  flex-direction: column;
+  padding: 0 max(16px, calc(50% - 410px));
+  text-align: left;
+  font: 16px/1.55 system-ui, sans-serif;
+  color: #fff;
   pointer-events: none;
 }
-#intro h1 { font: 700 10px/1 Georgia, serif; margin: 0; }
-#intro h1::after { content: "\00b7"; margin-left: 6px; font-weight: 400; }
+#intro h1 { font: 700 16px/1 Georgia, serif; margin: 0 0 10px; }
 #intro p  { margin: 0; }
+#intro p + p { margin-top: 6px; }
+#intro .intro-bio { font-size: 13px; }
+/* Translucent panel behind the bio so it reads over light areas of the photo
+   while the portrait stays visible through it. */
+.intro-text {
+  background: rgba(26, 26, 26, 0.45);
+  padding: 16px 20px;
+  border-radius: 6px;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
 
 #page-nav {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
+  align-items: center;
   gap: 64px;
+  padding: 0 16px;
 }
 #page-nav a {
   font: 700 96px/1 Georgia, serif;
@@ -100,6 +120,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
   border-bottom-width: 4px;
   padding-bottom: 6px;
 }
+
+#message-link {
+  position: absolute; right: 16px; bottom: 12px; z-index: 1;
+  font: 14px/1 system-ui, sans-serif;
+  border-bottom-width: 1px; padding-bottom: 2px;
+}
+
+
+.frame-page { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; }
 
 .page {
   max-width: 760px; margin: 0 auto; padding: 80px 48px;
@@ -115,9 +144,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 .page-links a { font: 18px/1 system-ui, sans-serif; border-bottom-width: 1px; }
 .page section { margin-bottom: 36px; }
 
-/* External documents (e.g. the Google Doc work page) render as black text on a
-   transparent background, so give them a light paper surface to sit on. The
-   doc's own inline <style> handles the rest of the formatting. */
 .doc-page {
   max-width: 820px; margin: 0 auto; padding: 64px 56px;
   background: #fff; color: #1a1a1a;
@@ -147,14 +173,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
   width: 1024px; height: 1024px;
   opacity: 0; pointer-events: none; z-index: -1;
 }
+/* The cloth's text: one <p> per Google Doc paragraph, filled in by cloth.js.
+   Both texture paths read these rules — drawElementImage lays the element out
+   with them, and the fallback painter reads them via getComputedStyle and
+   reproduces the flow on the canvas: word-wrapped lines stacked top-left on
+   mobile, and on desktop a centred block (see the desktop media block below;
+   the painter reads justify-content / align-content to match it).
+   46.8px bold (the old <h3>) is the largest size; cloth.js overrides
+   font-size inline, stepping down CLOTH_FONT_SIZES as the doc gains
+   paragraphs. Keep line-height unitless so it scales with that override. */
 #page-content {
   width: 1024px; height: 1024px; box-sizing: border-box;
-  padding: 90px 100px; background: #fafaf7; color: #1a1a1a;
-  font: 40px/1.45 Georgia, serif;
+  padding: 0; background: #fafaf7; color: #1a1a1a;
+  font: 700 46.8px/1.25 Georgia, serif;
 }
-#page-content h1 { font: 700 110px/1.1 Georgia, serif; margin: 0 0 48px; }
-#page-content p  { margin: 0 0 28px; }
-#page-content .meta { font-size: 28px; color: #777; margin-top: 60px; }
+#page-content p { margin: 0; }
 
 #hint {
   position: fixed; z-index: 2; color: #aaa;
@@ -165,11 +198,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 
 /* Desktop */
 @media (min-width: 768px) and (hover: hover) {
-  #three-canvas {
+  #page-content {
+    display: grid;
+    align-content: center;
+    justify-content: center;
+  }
+  #cloth-hit {
     cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M2 2 L2 22 L8 17 L12 25 L15 23 L11 16 L19 16 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/></svg>") 2 2, default;
   }
-  #three-canvas.over-link { cursor: grab; }
-  #three-canvas:active { cursor: grabbing; }
+  #cloth-hit:active { cursor: grabbing; }
   #hint {
     left: 16px; bottom: 12px;
     font: 14px/1 system-ui, sans-serif;
@@ -185,10 +222,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
   }
   #hint::before { content: "drag across the page to tear it"; }
 
-  #intro {
-    bottom: 34px; padding: 0 16px;
-    flex-wrap: wrap;
-  }
+  #intro { font-size: 14px; }
+  #intro h1 { font-size: 14px; }
+  #intro .intro-bio { font-size: 11px; }
+  .intro-text { padding: 12px 14px; }
+  #message-link { bottom: 60px; font-size: 12px; }
 
   #page-nav {
     flex-direction: column;

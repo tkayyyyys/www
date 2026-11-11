@@ -20,6 +20,12 @@
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23fafaf7'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-family='Georgia,serif' font-weight='700' font-size='34' fill='%231a1a1a'%3ETK%3C/text%3E%3C/svg%3E" />
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
+<!-- Start fetching the cloth's text (a public Google Doc) while three.js is
+     still downloading; cloth.js's fetch() of the same URL reuses this response.
+     Remove if the Network panel ever shows the export requested twice. -->
+<link rel="preload" as="fetch" crossorigin="anonymous"
+      href="https://docs.google.com/document/d/1YLRYtxePRIJzSMIwcWiJ2h0cZQN3C1Luc4a_5otdVV8/export?format=txt">
 
 <script type="application/ld+json">
 {
@@ -64,47 +70,49 @@ try {
 </head>
 <body>
 
+<!-- Cloth texture source. Starts empty (blank paper); cloth.js fills it with
+     the Google Doc's paragraphs once they have been fetched. -->
 <canvas id="source-canvas" width="1024" height="1024" layoutsubtree>
-  <div id="page-content">
-    <h3>Hello world.</h3>
-  </div>
+  <div id="page-content"></div>
 </canvas>
 
 
 <div id="background">
+  <!-- Home: bio stacked above the nav, the pair centred together. -->
+  <div id="home">
   <header id="intro">
-    <h1>Tomasz Kobialka</h1>
-    <p>Contemporary artist based in London.</p>
+    <div class="intro-text">
+    <h1>Tomasz Kobialka (b. 1983 Mielec, Poland)</h1>
+    <p>Tomasz Kobialka is a Polish-Australian artist and Software Engineer who lives and works in London.</p>
+    <p>Kobialka’s artistic practice examines the ideologies and power structures through which financial and economic systems shape everyday life. Working across digital media, sculpture, and installation, the work often draws on personal experiences and narratives.</p>
+   <!--<p class="intro-bio">After finishing the MFA course at Goldsmiths University, Kobialka received the 2017 Studiomakers prize and an honourable mention at the 2017 EU Startpoint prize. This was followed by Finsbury Park (2019) a solo show at Interstate Projects, New York and a commission by Daata Editions (2019) screened at Vanity Projects Miami &amp; New York &amp; Art Night London. Notable exhibitions include: Sleeplessness (2022) at Videograms ‘22 Vilnius, Obsession (2023), at NIDA Art Colony in NIDA, Lithuania. In 2023 Kobialka was one of eighteen artists to participate in the Channeling the Frieze Hallway Commission at the Frieze Art Fair in London to mark the 20th anniversary of Frieze. In 2025 the artist was part of The Gearwheel, Hardworking Hands and the Tired Exhibition Visitor, a group show at Editorial Gallery in Vilnius. Kobialka has participated in various artist development programmes including Deep Ecology in the Cognitive Capitalocene at the Saas Fee Summer Institute of Art (2022), LUX Critical Forum 2023-24 and Weird Economies, The Creepin' Illiberalist seminar (2024). Kobialka is currently a participant in the Conditions Studio programme (2024 - 2027).</p>
+  -->  
+  </div>
   </header>
 
   <nav id="page-nav" aria-label="Site">
-    <a href="#cv" data-page="cv">CV</a>
-    <a href="#work" data-page="work">Work</a>
+    <a href="#cv" data-page="cv">About</a>
+    <a href="#work" data-page="work">Portfolio</a>
   </nav>
+  </div>
+  <a id="message-link" href="#message" data-page="message"><i class="fa-solid fa-comment-dollar" aria-hidden="true"></i> Leave me a message</a>
 </div>
 
 
 <canvas id="three-canvas"></canvas>
+<!-- Transparent layer that owns all pointer input for the cloth. cloth.js
+     clips a disc out of it when the pointer is over a torn hole ("porthole")
+     so real events reach what is behind — the only way into an iframe. -->
+<div id="cloth-hit"></div>
 <div id="hint"></div>
 
 <!-- Opaque "paper" placeholder. Sits above every layer and paints on the very
-     first frame (it's pure CSS + text), so the heavy three.js + cloth.js load —
+     first frame (it's pure CSS), so the heavy three.js + cloth.js load —
      and the deferred background photo — never flash on screen before the cloth
      is ready. cloth.js calls window.__clothReady() after its first render. -->
-<div id="cloth-loader" aria-hidden="true">
-  <h3>Hello world.</h3>
-</div>
+<div id="cloth-loader" aria-hidden="true"></div>
 
 <script>
-  // The cloth's fallback texture stretches a 1024² canvas onto the viewport, so
-  // the placeholder heading must match that horizontal stretch (vw/vh) to line
-  // up with the live cloth. Keep it in sync until the placeholder is gone.
-  (function syncStretch() {
-    if (window.__clothRevealed) return;
-    document.documentElement.style.setProperty('--cloth-stretch', window.innerWidth / window.innerHeight);
-    requestAnimationFrame(syncStretch);
-  })();
-
   // Reveal the real scene: bring in the (deferred) background photo behind the
   // cloth and fade the placeholder out. Idempotent — safe to call more than once.
   window.__clothReady = function () {
