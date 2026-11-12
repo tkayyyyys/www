@@ -70,9 +70,11 @@ try {
 </head>
 <body>
 
-<!-- Cloth texture source. Starts empty (blank paper); cloth.js fills it with
-     the Google Doc's paragraphs once they have been fetched. -->
-<canvas id="source-canvas" width="1024" height="1024" layoutsubtree>
+<!-- Cloth texture source. cloth.js sizes the bitmap to the viewport, draws a
+     Google Docs-style editor window on it, and fills #page-content with the
+     Google Doc's paragraphs (laid out on the window's page sheet) once they
+     have been fetched. -->
+<canvas id="source-canvas" layoutsubtree>
   <div id="page-content"></div>
 </canvas>
 

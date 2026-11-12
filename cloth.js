@@ -1,7 +1,8 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
 // ---------------------------------------------------------------
-// 1. Source texture — render live DOM into a 2D canvas
+// 1. Source texture — a Google Docs editor window drawn with the 2D canvas
+//    API, with the live doc text laid out on its white page sheet
 // ---------------------------------------------------------------
 const srcCanvas = document.getElementById('source-canvas');
 const srcCtx = srcCanvas.getContext('2d');
@@ -14,13 +15,59 @@ let hasDrawElementImage = typeof srcCtx.drawElementImage === 'function';
 // One line per doc paragraph; the body starts with a BOM and uses CRLF.
 const CLOTH_DOC_URL = 'https://docs.google.com/document/d/1YLRYtxePRIJzSMIwcWiJ2h0cZQN3C1Luc4a_5otdVV8/export?format=txt';
 
+// The doc text is laid out in logical units sized so that LOGICAL_PER_VW
+// units span the viewport width — the 1024px "paper" the font sizes below
+// were designed for — then drawn into the page sheet's inner rect. The text
+// therefore keeps the on-screen size it had when the paper filled the
+// viewport; the sheet only clips it.
+const LOGICAL_PER_VW = 1024;
+
 // Font sizes the cloth steps through as the doc grows, largest first. The
 // first four are h3–h6 at the 40px base the cloth was designed with
 // (1.17 / 1 / 0.83 / 0.67em); the rest keep the same ~17% ratio down to the
 // 12px floor. With the 1.25 line height each step fits this many paragraphs
-// on the 1024px paper: 17 / 20 / 24 / 30 / 36 / 43 / 52 / 63 / 68. Past 68
-// the text stays at 12px and the remainder falls off the bottom.
+// per 1024 logical units of box height: 17 / 20 / 24 / 30 / 36 / 43 / 52 /
+// 63 / 68. Past the last step the text stays at 12px and the remainder
+// falls off the bottom of the sheet.
 const CLOTH_FONT_SIZES = [46.8, 40, 33.2, 26.8, 22.4, 18.7, 15.6, 13, 12];
+
+// Google Docs' palette and strings. Everything below is drawn procedurally
+// with canvas paths and local system fonts: no images, no web fonts.
+const UI = {
+  // Google Docs' values stepped down 30 levels per channel, except the sheet,
+  // which sits one step lighter than the chrome (15 below white) so the text
+  // surface stands out from the window while still separating from a white
+  // page behind a tear.
+  window: '#dbdddf',      // title bar + editor background
+  toolbar: '#cfd4dc',     // toolbar strip
+  sheet: '#f0f0f0',
+  sheetBorder: '#bcbec2',
+  sharePill: '#c2e7ff', shareText: '#001d35',
+  text: '#1f1f1f',        // title / menu text
+  docBlue: '#4285f4', docBlueLight: '#a1c2fa', // document glyph
+};
+const UI_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+const DOC_TITLE = 'Derivative: a financial instrument or a poor copy';
+const MENU_ITEMS = ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Extensions', 'Help'];
+
+// Longest side of the texture. Viewport CSS size × min(dpr, 2), capped here
+// and at the GPU's limit, so the texture has the viewport's aspect ratio and
+// the chrome is never stretched.
+const MAX_TEXTURE_SIDE = 2048;
+
+// Mirrors the mobile/touch block in styles.css, so the chrome switches layout
+// exactly where the CSS switches #page-content between centred and top-left.
+const compactMQ = matchMedia('(max-width: 767px), (hover: none)');
+
+// The window chrome only changes with the layout, so it is painted once per
+// layout into this offscreen canvas and blitted on every repaint.
+const chromeCanvas = document.createElement('canvas');
+const chromeCtx = chromeCanvas.getContext('2d');
+
+let layout = null;             // layoutChrome() result, in CSS px
+let texScale = { x: 1, y: 1 }; // texture px per CSS px
+let textureDirty = false;      // repaint + re-upload on the next tick
+let clothLineCount = 0;        // doc paragraphs, so resize can re-fit the size
 
 // Computed line height in px, falling back to 1.25em when the browser
 // reports 'normal'.
@@ -29,15 +76,16 @@ function lineHeightPx(s) {
   return Number.isFinite(lh) ? lh : parseFloat(s.fontSize) * 1.25;
 }
 
-// Choose the largest step at which `lineCount` paragraphs fit the paper and
-// apply it inline. The line-height ratio comes from styles.css (unitless, so
-// it scales with the size); both render paths then pick the size up through
-// the <p>s' computed styles. Counts paragraphs, not wrapped lines: a long
-// paragraph that wraps can still run off the bottom.
+// Choose the largest step at which `lineCount` paragraphs fit the logical
+// box and apply it inline. The line-height ratio comes from styles.css
+// (unitless, so it scales with the size); both render paths then pick the
+// size up through the <p>s' computed styles. Counts paragraphs, not wrapped
+// lines: a long paragraph that wraps can still run off the bottom.
 function fitClothFontSize(lineCount) {
   const s = getComputedStyle(pageEl);
   const ratio = lineHeightPx(s) / parseFloat(s.fontSize);
-  const size = CLOTH_FONT_SIZES.find(px => lineCount * px * ratio <= srcCanvas.height)
+  const boxH = layout ? layout.logical.h : LOGICAL_PER_VW;
+  const size = CLOTH_FONT_SIZES.find(px => lineCount * px * ratio <= boxH)
     ?? CLOTH_FONT_SIZES[CLOTH_FONT_SIZES.length - 1];
   pageEl.style.fontSize = `${size}px`;
 }
@@ -47,8 +95,9 @@ function fitClothFontSize(lineCount) {
 // the font-size step. Built with textContent, never innerHTML — the text
 // comes from a third party.
 function renderClothText(text) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  fitClothFontSize(lines.length);
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  clothLineCount = lines.length;
+  fitClothFontSize(clothLineCount);
   pageEl.replaceChildren(...lines.map(line => {
     const p = document.createElement('p');
     p.textContent = line;
@@ -56,27 +105,249 @@ function renderClothText(text) {
   }));
 }
 
-// Fetch the doc and paint it. Called once `texture` exists (section 2). The
-// explicit repaint matters when the cloth was torn before the text arrived,
-// because tick() stops repainting after the first tear.
+// Fetch the doc and flag a repaint. Called once `texture` exists (section 2).
+// The repaint happens in tick() whether or not the cloth has already torn.
 async function loadClothText() {
   try {
     const res = await fetch(CLOTH_DOC_URL);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     renderClothText(await res.text());
-    paintSource();
-    texture.needsUpdate = true;
+    textureDirty = true;
   } catch (err) {
-    // Leave the paper blank; the site works without the text.
+    // Leave the page blank; the site works without the text.
     console.error('cloth text failed to load', err);
   }
 }
 
+// Greedy word wrap with the context's current font. A single word wider than
+// `maxWidth` overflows rather than being broken mid-word. Always returns at
+// least one (possibly empty) line.
+function wrapWords(ctx, text, maxWidth) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  lines.push(line);
+  return lines;
+}
+
+// Truncate `text` with an ellipsis so it fits `maxWidth` in the context's
+// current font. Used for the title, which is longer than a phone's top bar.
+function fitText(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '\u2026').width > maxWidth) t = t.slice(0, -1);
+  return t.trimEnd() + '\u2026';
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Generic blue "document" glyph: a sheet with a folded corner and text lines.
+function drawDocGlyph(ctx, x, y, w, h) {
+  const fold = w * 0.32, r = 3;
+  ctx.fillStyle = UI.docBlue;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - fold, y);
+  ctx.lineTo(x + w, y + fold);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = UI.docBlueLight;
+  ctx.beginPath();
+  ctx.moveTo(x + w - fold, y);
+  ctx.lineTo(x + w, y + fold);
+  ctx.lineTo(x + w - fold, y + fold);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  const lx = x + w * 0.22, lw = w * 0.56;
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(lx, y + h * (0.5 + i * 0.11), i === 3 ? lw * 0.6 : lw, 2);
+  }
+}
+
+// Lay the editor window out for a `vw`×`vh` CSS-px viewport. Returns rects in
+// CSS px plus the logical text box the doc text is laid out in:
+//   header, toolbar, sheet, inner (sheet minus padding, cut at the viewport
+//   bottom), logical { w, h } in units of (vw / LOGICAL_PER_VW) CSS px.
+// The sheet spans the full width minus a margin and runs off the bottom.
+function layoutChrome(vw, vh, compact) {
+  const L = { vw, vh, compact };
+  if (compact) {
+    L.header = { x: 0, y: 0, w: vw, h: 56 };
+    L.toolbar = { x: 16, y: L.header.h, w: vw - 32, h: 44 };
+    const top = L.toolbar.y + L.toolbar.h + 16;
+    L.sheet = { x: 16, y: top, w: vw - 32, h: vh - top + 24 }; // runs off the bottom
+    L.pad = 24;
+  } else {
+    L.header = { x: 0, y: 0, w: vw, h: 64 };
+    L.toolbar = { x: 16, y: L.header.h, w: vw - 32, h: 40 };
+    const top = L.toolbar.y + L.toolbar.h + 24;
+    L.sheet = { x: 24, y: top, w: vw - 48, h: vh - top + 24 };
+    L.pad = 48;
+  }
+  const p = L.pad;
+  L.inner = {
+    x: L.sheet.x + p,
+    y: L.sheet.y + p,
+    w: Math.max(1, L.sheet.w - 2 * p),
+    h: Math.max(1, vh - (L.sheet.y + p)),
+  };
+  const k = vw / LOGICAL_PER_VW; // CSS px per logical unit (today's text scale)
+  L.unit = k;
+  L.logical = {
+    w: Math.max(1, Math.round(L.inner.w / k)),
+    h: Math.max(1, Math.round(L.inner.h / k)),
+  };
+  return L;
+}
+
+// Draw the window chrome in CSS px. The caller has already applied the
+// CSS-px -> texture-px scale transform.
+function paintChrome(ctx, L) {
+  const { vw, vh } = L;
+  ctx.fillStyle = UI.window;
+  ctx.fillRect(0, 0, vw, vh);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+
+  // Title bar
+  if (L.compact) {
+    const cy = L.header.h / 2, ax = 24;
+    ctx.strokeStyle = UI.text;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath(); // back arrow
+    ctx.moveTo(ax + 8, cy); ctx.lineTo(ax - 8, cy);
+    ctx.moveTo(ax - 1, cy - 7); ctx.lineTo(ax - 8, cy); ctx.lineTo(ax - 1, cy + 7);
+    ctx.stroke();
+    ctx.fillStyle = UI.text;
+    ctx.font = `18px ${UI_FONT}`;
+    ctx.fillText(fitText(ctx, DOC_TITLE, vw - 52 - 16), 52, cy);
+  } else {
+    const pw = 104, ph = 40, px = vw - 16 - pw, py = 12; // Share pill
+    drawDocGlyph(ctx, 18, 12, 28, 40);
+    ctx.fillStyle = UI.text;
+    ctx.font = `18px ${UI_FONT}`;
+    ctx.fillText(fitText(ctx, DOC_TITLE, px - 16 - 60), 60, 22);
+    ctx.font = `14px ${UI_FONT}`;
+    let x = 60;
+    for (const item of MENU_ITEMS) {
+      ctx.fillText(item, x, 48);
+      x += ctx.measureText(item).width + 16;
+    }
+    ctx.fillStyle = UI.sharePill;
+    roundRect(ctx, px, py, pw, ph, ph / 2);
+    ctx.fill();
+    ctx.fillStyle = UI.shareText;
+    ctx.font = `500 14px ${UI_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('Share', px + pw / 2, py + ph / 2);
+    ctx.textAlign = 'left';
+  }
+
+  // Toolbar strip: a plain pill, no icons.
+  const t = L.toolbar;
+  ctx.fillStyle = UI.toolbar;
+  roundRect(ctx, t.x, t.y, t.w, t.h, t.h / 2);
+  ctx.fill();
+
+  // Page sheet: soft shadow, white fill, 1px border.
+  const s = L.sheet;
+  ctx.save();
+  ctx.shadowColor = 'rgba(60, 64, 67, 0.18)';
+  ctx.shadowBlur = 8 * texScale.x;   // shadows ignore the CTM
+  ctx.shadowOffsetY = 1 * texScale.y;
+  ctx.fillStyle = UI.sheet;
+  ctx.fillRect(s.x, s.y, s.w, s.h);
+  ctx.restore();
+  ctx.strokeStyle = UI.sheetBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(s.x + 0.5, s.y + 0.5, s.w - 1, s.h - 1);
+}
+
+// Size the texture to the viewport's aspect ratio. Changing a canvas's
+// bitmap size invalidates the GL texture three.js already allocated for it;
+// dispose() makes the next needsUpdate re-allocate instead of texSubImage2D
+// into the stale allocation. `renderer` and `texture` are created in
+// section 2; this is only ever called after that.
+function sizeSourceCanvas() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cap = Math.min(MAX_TEXTURE_SIDE, renderer.capabilities.maxTextureSize);
+  const k = Math.min(dpr, cap / Math.max(vw, vh));
+  const w = Math.max(1, Math.round(vw * k));
+  const h = Math.max(1, Math.round(vh * k));
+  if (srcCanvas.width !== w || srcCanvas.height !== h) {
+    srcCanvas.width = w;
+    srcCanvas.height = h;
+    chromeCanvas.width = w;
+    chromeCanvas.height = h;
+    texture.dispose();
+  }
+  texScale = { x: w / vw, y: h / vh };
+}
+
+// Re-layout everything that depends on the viewport: texture size, chrome
+// rects, the logical text box (applied to #page-content so drawElementImage
+// lays the text out in it), the font-size step, and the cached chrome.
+// Called on first build, resize, and when the compact media query flips.
+function layoutTexture() {
+  sizeSourceCanvas();
+  layout = layoutChrome(window.innerWidth, window.innerHeight, compactMQ.matches);
+  pageEl.style.width = `${layout.logical.w}px`;
+  pageEl.style.height = `${layout.logical.h}px`;
+  // Keep the (invisible) host canvas's CSS box at least as big as its fallback
+  // content so layoutsubtree never has #page-content overflowing it.
+  srcCanvas.style.width = `${layout.logical.w}px`;
+  srcCanvas.style.height = `${layout.logical.h}px`;
+  fitClothFontSize(clothLineCount);
+  chromeCtx.setTransform(texScale.x, 0, 0, texScale.y, 0, 0);
+  chromeCtx.clearRect(0, 0, layout.vw, layout.vh);
+  paintChrome(chromeCtx, layout);
+  textureDirty = true;
+}
+
+// Paint the texture: the cached chrome, then the doc text in the sheet's
+// inner rect. The text is laid out in the logical box and scaled onto the
+// inner rect by `layout.unit` CSS px per unit.
 function paintSource() {
+  const { inner, logical, unit } = layout;
+  const sx = texScale.x, sy = texScale.y;
+  srcCtx.setTransform(1, 0, 0, 1, 0, 0);
+  srcCtx.clearRect(0, 0, srcCanvas.width, srcCanvas.height);
+  srcCtx.drawImage(chromeCanvas, 0, 0);
+  const dx = inner.x * sx, dy = inner.y * sy;
+  const dw = logical.w * unit * sx, dh = logical.h * unit * sy;
+
   if (hasDrawElementImage) {
     try {
-      srcCtx.reset();
-      srcCtx.drawElementImage(pageEl, 0, 0, 1024, 1024);
+      // Destination in texture px under the identity transform, so this does
+      // not depend on whether the (still changing) API honours the CTM.
+      srcCtx.drawElementImage(pageEl, dx, dy, dw, dh);
       return;
     } catch (err) {
       // The HTML-in-canvas API is still changing: current Chrome exposes
@@ -89,55 +360,50 @@ function paintSource() {
   }
   // Fallback: #page-content sits inside <canvas> fallback content, so it is
   // never laid out (every rect is 0×0 at the origin). Reproduce a minimal
-  // block flow by hand from the computed styles: top-left origin, each
-  // block word-wrapped to the paper width, blocks stacked with their margins.
-  // Then place the whole block: centred when styles.css asks for it via
-  // justify-content / align-content (desktop), else top-left. Offsets clamp
-  // at 0 so a block larger than the paper is clipped bottom/right, as before.
+  // block flow by hand from the computed styles, in logical units under a
+  // transform that maps the logical box onto the inner rect: top-left
+  // origin, each block word-wrapped to the box width, blocks stacked with
+  // their margins. Then place the whole block: centred when styles.css asks
+  // for it via justify-content / align-content (desktop), else top-left.
+  // Offsets clamp at 0 so a block larger than the box is clipped
+  // bottom/right, as before.
+  srcCtx.save();
+  srcCtx.setTransform(sx * unit, 0, 0, sy * unit, dx, dy);
+  srcCtx.beginPath();
+  srcCtx.rect(0, 0, logical.w, logical.h);
+  srcCtx.clip();
   const pageStyle = getComputedStyle(pageEl);
-  srcCtx.fillStyle = pageStyle.backgroundColor || '#fafaf7';
-  srcCtx.fillRect(0, 0, 1024, 1024);
+  srcCtx.fillStyle = pageStyle.backgroundColor || '#fff';
+  srcCtx.fillRect(0, 0, logical.w, logical.h);
   srcCtx.textBaseline = 'top';
-  const maxWidth = srcCanvas.width;
+  srcCtx.textAlign = 'left';
+  const maxWidth = logical.w;
   const lines = [];
   let blockWidth = 0;
   let y = 0;
   for (const el of pageEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p')) {
-    if (y > srcCanvas.height) break;
+    if (y > logical.h) break;
     const s = getComputedStyle(el);
     const font = `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
     srcCtx.font = font;
     const lineHeight = lineHeightPx(s);
     y += parseFloat(s.marginTop) || 0;
-    const push = text => {
+    for (const text of wrapWords(srcCtx, el.textContent, maxWidth)) {
       lines.push({ text, y, font, color: s.color });
       blockWidth = Math.max(blockWidth, Math.min(maxWidth, srcCtx.measureText(text).width));
       y += lineHeight;
-    };
-    // Greedy word wrap. A single word wider than the paper overflows rather
-    // than being broken mid-word.
-    let line = '';
-    for (const word of el.textContent.split(/\s+/).filter(Boolean)) {
-      const candidate = line ? `${line} ${word}` : word;
-      if (line && srcCtx.measureText(candidate).width > maxWidth) {
-        push(line);
-        line = word;
-      } else {
-        line = candidate;
-      }
     }
-    push(line); // flush the last line
     y += parseFloat(s.marginBottom) || 0;
   }
-  const x0 = pageStyle.justifyContent === 'center' ? Math.max(0, (srcCanvas.width - blockWidth) / 2) : 0;
-  const y0 = pageStyle.alignContent === 'center' ? Math.max(0, (srcCanvas.height - y) / 2) : 0;
+  const x0 = pageStyle.justifyContent === 'center' ? Math.max(0, (logical.w - blockWidth) / 2) : 0;
+  const y0 = pageStyle.alignContent === 'center' ? Math.max(0, (logical.h - y) / 2) : 0;
   for (const l of lines) {
     srcCtx.font = l.font;
     srcCtx.fillStyle = l.color;
     srcCtx.fillText(l.text, x0, y0 + l.y);
   }
+  srcCtx.restore();
 }
-paintSource();
 
 // ---------------------------------------------------------------
 // 2. Three.js scene
@@ -153,7 +419,11 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 0, 14);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+// r160 uses physically based light units: diffuse ≈ ambient/π + key·N·L/π.
+// 2.3 + 0.9 gives ≈ 0.95 linear flat-on, so the white sheet renders near
+// white (~sRGB 250) with ~10% shading where folds turn from the key light.
+// Tune by eye: raise ambient to flatten, raise the key to deepen the folds.
+scene.add(new THREE.AmbientLight(0xffffff, 2.3));
 const key = new THREE.DirectionalLight(0xffffff, 0.9);
 key.position.set(3, 4, 6);
 scene.add(key);
@@ -161,6 +431,7 @@ scene.add(key);
 const texture = new THREE.CanvasTexture(srcCanvas);
 texture.colorSpace = THREE.SRGBColorSpace;
 texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+layoutTexture(); // size the texture to the viewport, paint the chrome, flag the first paint
 loadClothText();
 
 // ---------------------------------------------------------------
@@ -650,18 +921,21 @@ function tick() {
   const torn = stepPhysics();
   if (torn) rebuildIndices();
   writePositions();
-  // Keep the DOM->texture loop live until the page starts tearing — then freeze it.
-  if (!firstTearShown) {
+  // The texture is an image: repaint only when something changed it (text
+  // arrived, viewport resized). Runs before the first render so the loader
+  // handoff still swaps onto a painted cloth.
+  if (textureDirty) {
     paintSource();
     texture.needsUpdate = true;
-    if (torn) {
-      firstTearShown = true;
-      window.posthog?.capture?.('cloth torn', { input_type: isTouch ? 'touch' : 'mouse' });
-    }
+    textureDirty = false;
+  }
+  if (torn && !firstTearShown) {
+    firstTearShown = true;
+    window.posthog?.capture?.('cloth torn', { input_type: isTouch ? 'touch' : 'mouse' });
   }
   renderer.render(scene, camera);
   // First frame is on screen — bring in the deferred background photo behind the
-  // cloth and fade out the loading placeholder. The canvas now has paper drawn
+  // cloth and fade out the loading placeholder. The canvas now has the editor window drawn
   // on it, so the swap from placeholder to live cloth is seamless.
   if (!clothRevealed) {
     clothRevealed = true;
@@ -677,4 +951,8 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   closePorthole();
   buildCloth();
+  layoutTexture();
 });
+// A hover-capability change (e.g. plugging in a mouse) flips the layout
+// without a resize event.
+compactMQ.addEventListener('change', layoutTexture);

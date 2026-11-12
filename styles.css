@@ -42,13 +42,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
   }
 }
 
-/* Opaque "paper" placeholder shown until the cloth's first frame renders.
-   The resting cloth is a flat lit plane (MeshStandardMaterial under the scene's
-   fixed lighting), so the #fafaf7 paper reads as a near-uniform grey on screen —
-   matching that tone here keeps the swap from flashing brighter. */
+/* Opaque placeholder shown until the cloth's first frame renders. The cloth is
+   a Google Docs-style window whose dominant tone is its #dbdddf header/editor
+   background, which the scene's lighting renders at rgb(215,217,219) on
+   screen (sampled from a headless render); matching that tone keeps the swap
+   from flashing. Re-sample it if the palette or lights in cloth.js change. */
 #cloth-loader {
   position: fixed; inset: 0; z-index: 3;
-  background: rgb(166, 166, 164);
+  background: rgb(215, 217, 219);
   opacity: 1;
   transition: opacity 0.45s ease;
   pointer-events: none;
@@ -167,13 +168,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
 .page p { margin: 0 0 8px; color: #d8d8d2; }
 
 /* The source canvas hosts the live DOM that we rasterize via drawElementImage.
-   It must be in the document (for layout) but invisible to the user. */
+   It must be in the document (for layout) but invisible to the user. cloth.js
+   sets its bitmap size to the viewport (× dpr) and its CSS size to the
+   logical text box; the size here is only a pre-script default. */
 #source-canvas {
   position: fixed; left: 0; top: 0;
   width: 1024px; height: 1024px;
   opacity: 0; pointer-events: none; z-index: -1;
 }
 /* The cloth's text: one <p> per Google Doc paragraph, filled in by cloth.js.
+   It sits on the white page sheet of the editor window cloth.js draws, so the
+   background is white. cloth.js overrides width/height inline with the
+   logical text box that maps onto the sheet's inner rect.
    Both texture paths read these rules — drawElementImage lays the element out
    with them, and the fallback painter reads them via getComputedStyle and
    reproduces the flow on the canvas: word-wrapped lines stacked top-left on
@@ -184,15 +190,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; fon
    paragraphs. Keep line-height unitless so it scales with that override. */
 #page-content {
   width: 1024px; height: 1024px; box-sizing: border-box;
-  padding: 0; background: #fafaf7; color: #1a1a1a;
+  padding: 0; background: #f0f0f0; color: #1a1a1a;   /* must match UI.sheet in cloth.js */
   font: 700 46.8px/1.25 Georgia, serif;
 }
 #page-content p { margin: 0; }
 
 #hint {
-  position: fixed; z-index: 2; color: #aaa;
+  position: fixed; z-index: 2; color: #5f6368;
   pointer-events: none;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
 }
 #hint::before { content: "move the mouse over the page"; }
 
